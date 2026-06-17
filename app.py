@@ -12,7 +12,6 @@ from homography import (
     auto_detect_quadrilateral,
     correct_perspective,
     draw_polygon,
-    enhance_scan,
     order_points,
     project_image,
 )
@@ -84,7 +83,10 @@ def inject_styles() -> None:
 
 
 def load_rgb(uploaded_file) -> np.ndarray:
-    image = Image.open(uploaded_file).convert("RGB")
+    if hasattr(uploaded_file, "path"):
+        image = Image.open(uploaded_file.path).convert("RGB")
+    else:
+        image = Image.open(uploaded_file).convert("RGB")
     return np.array(image)
 
 
@@ -253,6 +255,30 @@ def clickable_selector(image_rgb: np.ndarray) -> None:
 
 def show_matrix(matrix: np.ndarray) -> None:
     st.code(np.array2string(matrix, precision=4, suppress_small=True), language="text")
+    st.markdown(
+        """
+        **Representasi Elemen Matriks Homography ($3 \\times 3$):**
+        
+        $$
+        H = \\begin{bmatrix}
+        h_{11} & h_{12} & h_{13} \\\\
+        h_{21} & h_{22} & h_{23} \\\\
+        h_{31} & h_{32} & h_{33}
+        \\end{bmatrix}
+        $$
+        
+        * **Transformasi Linear ($h_{11}, h_{12}, h_{21}, h_{22}$)**:
+          * $h_{11}, h_{22}$: *Scaling* (skala ukuran objek pada sumbu X dan Y).
+          * $h_{12}, h_{21}$: *Rotation* (rotasi) dan *Shearing* (kemiringan geser).
+        * **Translasi / Pergeseran ($h_{13}, h_{23}$)**:
+          * $h_{13}$: Pergeseran posisi secara horizontal (sumbu X).
+          * $h_{23}$: Pergeseran posisi secara vertikal (sumbu Y).
+        * **Proyeksi Perspektif ($h_{31}, h_{32}$)**:
+          * Efek distorsi perspektif 3D (kemiringan bidang/efek jauh-dekat).
+        * **Normalisasi Skala ($h_{33}$)**:
+          * Nilai faktor skala normalisasi homogen (biasanya bernilai 1.0).
+        """
+    )
 
 
 def render_points_table(points: np.ndarray | None) -> None:
@@ -279,9 +305,9 @@ def valid_quad(points: np.ndarray) -> bool:
     return area > 50 and len(np.unique(ordered.astype(int), axis=0)) == 4
 
 
-def sidebar_controls() -> tuple[object, str, str, dict, dict]:
+def sidebar_controls() -> tuple[object, str, str, dict]:
     with st.sidebar:
-        st.title("Homography")
+        st.text("Muhammad Raihan Rizky Zain - 140810230049")
 
         uploaded_background = st.file_uploader(
             "Gambar utama",
@@ -291,7 +317,7 @@ def sidebar_controls() -> tuple[object, str, str, dict, dict]:
         st.divider()
         selection_mode = st.radio(
             "Seleksi area",
-            ["Manual", "Auto"],
+            ["Auto", "Manual"],
             horizontal=True,
         )
         action = st.radio(
@@ -301,34 +327,34 @@ def sidebar_controls() -> tuple[object, str, str, dict, dict]:
         )
 
         action_options = {
-            "enhance": False,
             "overlay_file": None,
             "opacity": 1.0,
         }
         if action == "Koreksi":
-            action_options["enhance"] = st.toggle("Scan enhancement", value=False)
+            pass
         else:
             action_options["overlay_file"] = st.file_uploader(
                 "Gambar overlay",
                 type=IMAGE_TYPES,
                 key="overlay_upload",
             )
-            action_options["opacity"] = st.slider("Opacity", 0.1, 1.0, 1.0, 0.05)
+        st.divider()
+        with st.expander("ℹ️ Tentang Homography"):
+            st.markdown(
+                """
+                **Homography** adalah matriks transformasi geometri ($3 \\times 3$) yang memetakan titik-titik dari satu bidang datar (2D) ke bidang datar lainnya.
+                
+                **Konsep Utama:**
+                * **Minimal 4 Titik**: Membutuhkan 4 pasangan titik sudut korespondensi ($x, y$) untuk menghitung matriks transformasi.
+                * **Persamaan**: $x' = H \\cdot x$ (di mana $H$ adalah matriks homography).
+                
+                **Penerapan:**
+                * **Koreksi**: Meluruskan perspektif gambar miring menjadi tegak lurus dari depan.
+                * **Proyeksi**: Menempelkan gambar baru (overlay) ke bidang miring gambar utama.
+                """
+            )
 
-        auto_options = {"show_edges": False}
-        if selection_mode == "Auto":
-            st.divider()
-            with st.expander("Auto detection", expanded=True):
-                auto_options["show_edges"] = st.checkbox("Tampilkan edge map", value=True)
-                auto_options["canny_low"] = st.slider("Canny low", 10, 150, 50, 5)
-                auto_options["canny_high"] = st.slider("Canny high", 60, 300, 150, 5)
-                auto_options["kernel_size"] = st.slider("Morph kernel", 1, 15, 5, 2)
-                auto_options["close_iterations"] = st.slider("Close", 0, 4, 1)
-                auto_options["dilate_iterations"] = st.slider("Dilate", 0, 3, 0)
-                auto_options["min_area_ratio"] = st.slider("Min area (%)", 0.1, 20.0, 1.0, 0.1) / 100.0
-                auto_options["use_adaptive"] = st.checkbox("Adaptive threshold", value=True)
-
-    return uploaded_background, selection_mode, action, auto_options, action_options
+    return uploaded_background, selection_mode, action, action_options
 
 
 def render_point_panel(image_shape: tuple[int, int, int]) -> None:
@@ -365,71 +391,83 @@ def render_point_panel(image_shape: tuple[int, int, int]) -> None:
         point_editor(image_shape)
 
 
-def render_auto_detection(image_rgb: np.ndarray, auto_options: dict) -> None:
-    result = auto_detect_quadrilateral(
-        image_rgb,
-        canny_low=auto_options["canny_low"],
-        canny_high=auto_options["canny_high"],
-        kernel_size=auto_options["kernel_size"],
-        close_iterations=auto_options["close_iterations"],
-        dilate_iterations=auto_options["dilate_iterations"],
-        min_area_ratio=auto_options["min_area_ratio"],
-        use_adaptive=auto_options["use_adaptive"],
-    )
+def render_auto_detection(image_rgb: np.ndarray) -> None:
+    """Auto detection: input and result side-by-side, details below."""
+    result = auto_detect_quadrilateral(image_rgb)
 
-    if auto_options["show_edges"]:
-        area_tab, edge_tab = st.tabs(["Area", "Edge map"])
-        with area_tab:
-            show_framed_image(result.debug_image, result.message)
-        with edge_tab:
-            edge_preview = draw_polygon(result.edge_image, result.points)
-            show_framed_image(edge_preview, "Edge map dengan titik koordinat kandidat")
-            render_points_table(result.points)
-    else:
+    # --- Side-by-side: input image | detected result ---
+    col_input, col_result = st.columns(2, gap="medium")
+    with col_input:
+        st.markdown("**Gambar Input**")
+        show_framed_image(image_rgb, f"{image_rgb.shape[1]}×{image_rgb.shape[0]} px")
+    with col_result:
+        st.markdown("**Hasil Deteksi**")
         show_framed_image(result.debug_image, result.message)
 
+    # --- Details below the images ---
     if result.points is None:
         st.warning(result.message)
         return
 
-    if st.button("Gunakan hasil deteksi", use_container_width=True):
-        set_detected_points(result.points)
-        st.rerun()
+    # Show edge map + coordinates in an expander
+    with st.expander("Detail deteksi", expanded=True):
+        detail_left, detail_right = st.columns([1, 1], gap="medium")
+        with detail_left:
+            st.markdown("**Edge Map**")
+            edge_preview = draw_polygon(result.edge_image, result.points)
+            show_framed_image(edge_preview, "Edge map dengan titik koordinat", height=320)
+        with detail_right:
+            st.markdown("**Koordinat Titik**")
+            ordered = order_points(result.points).astype(int)
+            st.dataframe(
+                {
+                    "Corner": CORNER_LABELS,
+                    "x": ordered[:, 0],
+                    "y": ordered[:, 1],
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+            st.metric("Titik terdeteksi", "4/4")
+            st.progress(1.0)
+
+    # Auto-apply detected points immediately
+    set_detected_points(result.points)
 
 
-def render_area_workspace(image_rgb: np.ndarray, selection_mode: str, auto_options: dict) -> None:
-    left, right = st.columns([1.45, 0.55], gap="large")
+def render_area_workspace(image_rgb: np.ndarray, selection_mode: str) -> None:
+    st.subheader("Area")
 
-    with left:
-        st.subheader("Area")
-        if selection_mode == "Manual":
+    if selection_mode == "Auto":
+        render_auto_detection(image_rgb)
+    else:
+        # Manual mode: clickable selector + point panel side-by-side
+        left, right = st.columns([1.45, 0.55], gap="large")
+        with left:
             clickable_selector(image_rgb)
-        else:
-            render_auto_detection(image_rgb, auto_options)
+        with right:
+            st.markdown("**Status**")
+            render_point_panel(image_rgb.shape)
 
-    with right:
-        st.subheader("Status")
-        render_point_panel(image_rgb.shape)
+            points = selected_points()
+            if points is None:
+                return
 
-        points = selected_points()
-        if points is None:
-            return
+            if not valid_quad(points):
+                st.error("Area tidak valid.")
+                return
 
-        if not valid_quad(points):
-            st.error("Area tidak valid.")
-            return
-
-        ordered_points = order_points(points)
-        st.markdown("**Urutan final**")
-        st.dataframe(
-            {
-                "corner": CORNER_LABELS,
-                "x": ordered_points[:, 0].astype(int),
-                "y": ordered_points[:, 1].astype(int),
-            },
-            hide_index=True,
-            use_container_width=True,
-        )
+            ordered_points = order_points(points)
+            st.markdown("**Urutan final**")
+            st.dataframe(
+                {
+                    "corner": CORNER_LABELS,
+                    "x": ordered_points[:, 0].astype(int),
+                    "y": ordered_points[:, 1].astype(int),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
 
 
 def render_result(image_rgb: np.ndarray, action: str, action_options: dict) -> None:
@@ -448,7 +486,7 @@ def render_result(image_rgb: np.ndarray, action: str, action_options: dict) -> N
 
     if action == "Koreksi":
         corrected, matrix = correct_perspective(image_rgb, ordered_points)
-        result_image = enhance_scan(corrected) if action_options["enhance"] else corrected
+        result_image = corrected
 
         before_col, after_col = st.columns(2, gap="large")
         with before_col:
@@ -498,13 +536,23 @@ def main() -> None:
     ensure_state()
     inject_styles()
 
-    uploaded_background, selection_mode, action, auto_options, action_options = sidebar_controls()
+    uploaded_background, selection_mode, action, action_options = sidebar_controls()
 
-    st.title("Homography Workspace")
+    st.title("Implementasi Homography untuk Koreksi Perspektif dan Proyeksi Citra pada Bidang Datar")
 
     if uploaded_background is None:
-        st.info("Upload gambar utama dari sidebar.")
-        return
+        import os
+        default_path = os.path.join(os.path.dirname(__file__), "example.jpg")
+        if os.path.exists(default_path):
+            class DefaultImageWrapper:
+                def __init__(self, path):
+                    self.path = path
+                    self.name = os.path.basename(path)
+                    self.size = os.path.getsize(path)
+            uploaded_background = DefaultImageWrapper(default_path)
+        else:
+            st.info("Upload gambar utama dari sidebar.")
+            return
 
     sync_uploaded_image(uploaded_background)
     image_rgb = load_rgb(uploaded_background)
@@ -519,7 +567,7 @@ def main() -> None:
     with header_cols[3]:
         st.metric("Channel", image_rgb.shape[2])
 
-    render_area_workspace(image_rgb, selection_mode, auto_options)
+    render_area_workspace(image_rgb, selection_mode)
     render_result(image_rgb, action, action_options)
 
 
