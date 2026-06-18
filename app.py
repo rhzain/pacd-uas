@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from html import escape
 from io import BytesIO
+import os
 
 import numpy as np
 import streamlit as st
@@ -15,6 +16,13 @@ from homography import (
     order_points,
     project_image,
 )
+
+
+class DefaultImageWrapper:
+    def __init__(self, path: str):
+        self.path = path
+        self.name = os.path.basename(path)
+        self.size = os.path.getsize(path)
 
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
@@ -504,8 +512,12 @@ def render_result(image_rgb: np.ndarray, action: str, action_options: dict) -> N
     else:
         overlay_file = action_options["overlay_file"]
         if overlay_file is None:
-            st.info("Upload gambar overlay di sidebar.")
-            return
+            default_overlay_path = os.path.join(os.path.dirname(__file__), "example-projection.jpg")
+            if os.path.exists(default_overlay_path):
+                overlay_file = DefaultImageWrapper(default_overlay_path)
+            else:
+                st.info("Upload gambar overlay di sidebar.")
+                return
 
         overlay_rgb = load_rgb(overlay_file)
         result_image, matrix = project_image(
@@ -541,14 +553,8 @@ def main() -> None:
     st.title("Implementasi Homography untuk Koreksi Perspektif dan Proyeksi Citra pada Bidang Datar")
 
     if uploaded_background is None:
-        import os
         default_path = os.path.join(os.path.dirname(__file__), "example.jpg")
         if os.path.exists(default_path):
-            class DefaultImageWrapper:
-                def __init__(self, path):
-                    self.path = path
-                    self.name = os.path.basename(path)
-                    self.size = os.path.getsize(path)
             uploaded_background = DefaultImageWrapper(default_path)
         else:
             st.info("Upload gambar utama dari sidebar.")
