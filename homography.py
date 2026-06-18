@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+from skimage.transform import ProjectiveTransform
+from skimage.transform import warp as skimage_warp
 
 
 @dataclass(frozen=True)
@@ -44,15 +46,37 @@ def destination_size(ordered_points: np.ndarray) -> tuple[int, int]:
 
 
 def correct_perspective(image_rgb: np.ndarray, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Correct perspective of a skewed planar region using ProjectiveTransform (scikit-image).
+
+    Follows the recipe from *Python Image Processing Cookbook* (Sandipan Dey, Packt 2020),
+    Chapter 1 — 'Applying perspective transformation and homography' (pp. 16-20).
+    Uses ProjectiveTransform.estimate() to compute the homography matrix H from four
+    point correspondences, then warp() (the 'There's more' variant from the book) to
+    apply the inverse mapping and produce the corrected output.
+    """
     src = order_points(points)
     width, height = destination_size(src)
     dst = np.array(
         [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
         dtype=np.float32,
     )
-    matrix = cv2.getPerspectiveTransform(src, dst)
-    corrected = cv2.warpPerspective(image_rgb, matrix, (width, height))
-    return corrected, matrix
+
+    # Estimate forward homography H: skewed area → rectangle (identical to the book's recipe).
+    pt = ProjectiveTransform()
+    pt.estimate(src, dst)
+    # warp() calls its inverse_map argument on output coords to find source coords.
+    # We pass the explicit inverse transform (H⁻¹) so each output pixel in the rectangle
+    # correctly maps back to the corresponding source pixel in the skewed area
+    # — equivalent to what cv2.warpPerspective does internally, and to pt.inverse() in the book.
+    pt_inv = ProjectiveTransform(matrix=np.linalg.inv(pt.params))
+    corrected = skimage_warp(
+        image_rgb,
+        pt_inv,
+        output_shape=(height, width),
+        preserve_range=True,
+        order=1,  # bilinear interpolation
+    )
+    return corrected.astype(np.uint8), pt.params  # pt.params = forward H (for display)
 
 
 def project_image(
@@ -61,24 +85,45 @@ def project_image(
     destination_points: np.ndarray,
     opacity: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Project an overlay image onto a planar region using ProjectiveTransform (scikit-image).
+
+    Extends the recipe from *Python Image Processing Cookbook* (Sandipan Dey, Packt 2020),
+    Chapter 1 — 'Applying perspective transformation and homography' (pp. 16-20).
+    The overlay's four corners are the source points; the selected area in the background
+    image are the destination points. warp() maps each background pixel back to the
+    corresponding overlay pixel via the explicit inverse transform, then the warped overlay
+    is alpha-blended onto the background.
+    """
     dst = order_points(destination_points)
     overlay_h, overlay_w = overlay_rgb.shape[:2]
+    # Source: four corners of the flat overlay image
     src = np.array(
         [[0, 0], [overlay_w - 1, 0], [overlay_w - 1, overlay_h - 1], [0, overlay_h - 1]],
         dtype=np.float32,
     )
 
-    matrix = cv2.getPerspectiveTransform(src, dst)
+    # Estimate forward H: overlay corners → background destination points.
+    pt = ProjectiveTransform()
+    pt.estimate(src, dst)
+    # Pass explicit inverse (H⁻¹) so warp maps each background pixel → overlay pixel.
+    pt_inv = ProjectiveTransform(matrix=np.linalg.inv(pt.params))
     bg_h, bg_w = background_rgb.shape[:2]
-    warped = cv2.warpPerspective(overlay_rgb, matrix, (bg_w, bg_h))
+    warped = skimage_warp(
+        overlay_rgb,
+        pt_inv,
+        output_shape=(bg_h, bg_w),
+        preserve_range=True,
+        order=1,  # bilinear interpolation
+    ).astype(np.uint8)
 
+    # Alpha mask for blending (cv2 retained for polygon fill & blur — not part of homography).
     mask = np.zeros((bg_h, bg_w), dtype=np.uint8)
     cv2.fillConvexPoly(mask, dst.astype(np.int32), 255)
     mask = cv2.GaussianBlur(mask, (3, 3), 0)
     alpha = (mask.astype(np.float32) / 255.0)[..., None] * float(np.clip(opacity, 0.0, 1.0))
 
     blended = background_rgb.astype(np.float32) * (1.0 - alpha) + warped.astype(np.float32) * alpha
-    return blended.clip(0, 255).astype(np.uint8), matrix
+    return blended.clip(0, 255).astype(np.uint8), pt.params  # pt.params = forward H (for display)
 
 
 def polygon_area(points: np.ndarray) -> float:
